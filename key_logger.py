@@ -15,7 +15,7 @@
 #   held down
 
 import logging
-from pynput.keyboard import Key, Listener
+from evdev import InputDevice, categorize, ecodes as e
 
 
 # ######### #### ######## ##########
@@ -57,31 +57,27 @@ if SEND_LOGS_TO_FILE:
 LOCKED_IN_GARBAGE_COLLECTION_LIMIT = 5
 
 MODIFIER_KEYS = [
-    Key.alt,
-    Key.alt_r,
-    Key.alt_l,
-    Key.cmd,
-    Key.cmd_r,
-    Key.cmd_l,
-    Key.ctrl,
-    Key.ctrl_r,
-    Key.ctrl_l,
-    Key.shift,
-    Key.shift_r,
-    Key.shift_l,
+    e.KEY_LEFTSHIFT,
+    e.KEY_RIGHTSHIFT,
+    e.KEY_LEFTALT,
+    e.KEY_RIGHTALT,
+    e.KEY_LEFTCTRL,
+    e.KEY_RIGHTCTRL,
+    e.KEY_LEFTMETA,
+    e.KEY_RIGHTMETA,
 ]
 
 IGNORED_KEYS = []
 
-REMAP = {
-    Key.alt_r: Key.alt,
-    Key.alt_l: Key.alt,
-    Key.ctrl_r: Key.ctrl,
-    Key.ctrl_l: Key.ctrl,
-    Key.cmd_r: Key.cmd,
-    Key.cmd_l: Key.cmd,
-    Key.shift_r: Key.shift,
-    Key.shift_l: Key.shift,
+REMAP_STR = {
+    e.KEY_LEFTSHIFT: "<shift>",
+    e.KEY_RIGHTSHIFT: "<shift>",
+    e.KEY_LEFTALT: "<alt>",
+    e.KEY_RIGHTALT: "<alt>",
+    e.KEY_LEFTCTRL: "<ctrl>",
+    e.KEY_RIGHTCTRL: "<ctrl>",
+    e.KEY_LEFTMETA: "<meta>",
+    e.KEY_RIGHTMETA: "<meta>",
 }
 
 keys_currently_down = []
@@ -268,11 +264,9 @@ def log(key):
   conceptually, to miss the mark on logging combos).
   """
   modifiers_down = [k for k in keys_currently_down if k in MODIFIER_KEYS]
-  if list(set([
-      Key.shift if k in [Key.shift, Key.shift_l, Key.shift_r] else k
-      for k in modifiers_down
-  ])) == [Key.shift] and key_is_a_symbol(key):
+  if list(set(modifiers_down)) == [key]:
     modifiers_down = []
+
   log_entry = ' + '.join(
       sorted([key_to_str(k) for k in modifiers_down])
       + [key_to_str(key)]
@@ -326,13 +320,10 @@ def key_to_str(key):
   character (for example: "'a'") and it escapes backslashes, so that part
   undoes those two items.
   """
-  s = str(key)
-  if not key_is_a_symbol(key):
-    s = f'<{s[4:]}>'
+  if key in MODIFIER_KEYS:
+    return REMAP_STR[key]
   else:
-    s = s.encode('latin-1', 'backslashreplace').decode('unicode-escape')
-    s = s[1:-1]  # trim the leading and trailing quotes
-  return s
+    return e.keys[key][4:].lower()
 
 
 def key_down(key):
@@ -367,8 +358,8 @@ def key_down(key):
       f'key down : {key_to_str(key)} : '
       f'{[key_to_str(k) for k in keys_currently_down]}'
   )
-  if key not in MODIFIER_KEYS:
-    log(key)
+  # if key not in MODIFIER_KEYS:
+  log(key)
 
 
 def key_up(key):
@@ -457,10 +448,6 @@ def preprocess(key, f):
   shift, and then ignoring shift.
   """
   k = key
-  if key in REMAP:
-    k = REMAP[key]
-    logging.debug(f'remapped key {key_to_str(key)} -> {key_to_str(k)}')
-
   if k in IGNORED_KEYS:
     logging.debug(f'ignoring key: {key_to_str(k)}')
     return
@@ -478,12 +465,17 @@ def main():
   if SEND_LOGS_TO_SQLITE:
     setup_sqlite_database()
 
-  with Listener(
-      on_press=(lambda key: preprocess(key, key_down)),
-      on_release=(lambda key: preprocess(key, key_up)),
-  ) as listener:
-    logging.info('starting to listen for keyboard events')
-    listener.join()
+  device = InputDevice('/dev/input/event3')
+  logging.info(f"Listening for keyboard events from device: {device.name}")
+
+  logging.info('starting to listen for keyboard events')
+  for event in device.read_loop():
+    if event.type == e.EV_KEY:
+      key = categorize(event)
+      if key.keystate == key.key_down:
+        preprocess(key.scancode, key_down)
+      elif key.keystate == key.key_up:
+        preprocess(key.scancode, key_up)
 
 
 if __name__ == '__main__':
